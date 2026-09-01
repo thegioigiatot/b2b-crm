@@ -1,0 +1,417 @@
+// CRM schema modeled after the "Báo Cáo Bán Hàng CRM" spreadsheet:
+// master data (Set up) -> customers & care history (Customer/Search) ->
+// sales transactions (Data SALE) -> monthly KPI per employee (KPI) -> dashboard (SET).
+//
+// Layered on top: Lead (raw prospect, scored) -> Customer (account) -> Deal
+// (opportunity moving through a configurable PipelineStage board) with a unified
+// Activity timeline, a lead/deal scoring engine (ScoringConfig) and a daily
+// operating-rhythm tracker (WorkRhythmTask / WorkRhythmLog).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Employee {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  name            String
+  phone           String?
+  email           String?
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  customers       Customer[]
+  orders          Order[]
+  kpiTargets      KpiTarget[]
+  tasks           Task[]
+  leads           Lead[]
+  deals           Deal[]
+  dealFollows     DealFollower[]
+  activities      Activity[]
+  workRhythmTasks WorkRhythmTask[]
+  workRhythmLogs  WorkRhythmLog[]
+  user            User?
+}
+
+// Tài khoản đăng nhập (Firebase). Mỗi User nối tối đa 1 Employee (nhân sự bán hàng).
+model User {
+  id          String    @id @default(cuid())
+  firebaseUid String?   @unique
+  email       String    @unique
+  name        String?
+  phone       String?
+  title       String? // chức danh
+  photoUrl    String? // URL hoặc data URI ảnh đại diện
+  role        String    @default("SALES") // ADMIN | MANAGER | SALES
+  active      Boolean   @default(false)
+  employeeId  String?   @unique
+  employee    Employee? @relation(fields: [employeeId], references: [id])
+  extraPerms  String? // JSON ghi đè quyền cho riêng user: { key: true|false }
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt @default(now())
+}
+
+// Bộ quyền cho mỗi vai trò (ADMIN | MANAGER | SALES). Sửa được ở /admin/roles.
+model RoleConfig {
+  role      String   @id // ADMIN | MANAGER | SALES
+  perms     String // JSON { key: boolean }
+  updatedAt DateTime @updatedAt
+}
+
+model Province {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  customers Customer[]
+  orders    Order[]
+  leads     Lead[]
+}
+
+model ProductGroup {
+  id         String      @id @default(cuid())
+  code       String?     @unique
+  name       String      @unique
+  orders     Order[]
+  kpiTargets KpiTarget[]
+}
+
+model Source {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  customers Customer[]
+  orders    Order[]
+  leads     Lead[]
+  deals     Deal[]
+}
+
+// Trạng thái chăm sóc — funnel stage, editable master list with a sort order
+// so the dashboard funnel/pipeline chart renders in a stable sequence. Kept for the
+// customer/account funnel and the sales list; deals now use PipelineStage instead.
+model CareStatus {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  sortOrder Int        @default(0)
+  color     String?
+  customers Customer[]
+  orders    Order[]
+}
+
+// Giai đoạn Pipeline — the ordered columns of the Sale Pipeline (Deal) board and the
+// chevron stage bar on a deal. baseWinRate feeds the deal probability calculation.
+model PipelineStage {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  sortOrder   Int      @default(0)
+  color       String?
+  baseWinRate Float    @default(0.1) // "Tỷ lệ thắng cơ sở của giai đoạn"
+  isWon       Boolean  @default(false)
+  isLost      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  deals       Deal[]
+}
+
+model Customer {
+  id                String             @id @default(cuid())
+  code              String             @unique
+  name              String
+  gender            String?
+  dob               DateTime?
+  phone             String?
+  provinceId        String?
+  province          Province?          @relation(fields: [provinceId], references: [id])
+  district          String?
+  taxCode           String? // mã số thuế (pháp nhân thật) — dùng cho chấm điểm deal
+  industry          String? // ngành nghề
+  sourceId          String?
+  source            Source?            @relation(fields: [sourceId], references: [id])
+  employeeId        String?
+  employee          Employee?          @relation(fields: [employeeId], references: [id])
+  careStatusId      String?
+  careStatus        CareStatus?        @relation(fields: [careStatusId], references: [id])
+  isNew             Boolean            @default(true)
+  latestContactDate DateTime?
+  storeName         String?
+  storeAddress      String?
+  notes             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  orders            Order[]
+  careLogs          CareLog[]
+  documents         CustomerDocument[]
+  tasks             Task[]
+  deals             Deal[]
+  leads             Lead[]
+  contacts          Contact[]
+}
+
+// Người liên hệ tại một khách hàng (công ty). Deal gắn tối đa 1 contact.
+model Contact {
+  id         String    @id @default(cuid())
+  name       String
+  title      String? // chức danh
+  phone      String?
+  email      String?
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  deals      Deal[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+// Lịch sử chăm sóc khách hàng
+model CareLog {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  date       DateTime
+  content    String? // Ngày / Nội dung trao đổi
+  feedback   String? // Phản hồi / Góp ý / Vấn đề
+  resolution String? // Phương án xử lý
+  createdAt  DateTime @default(now())
+}
+
+model CustomerDocument {
+  id         String    @id @default(cuid())
+  customerId String
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  link       String?
+  date       DateTime?
+}
+
+// Dữ liệu doanh số bán hàng — one row per sales interaction / order.
+model Order {
+  id             String        @id @default(cuid())
+  date           DateTime
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  employeeId     String?
+  employee       Employee?     @relation(fields: [employeeId], references: [id])
+  productGroupId String?
+  productGroup   ProductGroup? @relation(fields: [productGroupId], references: [id])
+  provinceId     String?
+  province       Province?     @relation(fields: [provinceId], references: [id])
+  sourceId       String?
+  source         Source?       @relation(fields: [sourceId], references: [id])
+  careStatusId   String?
+  careStatus     CareStatus?   @relation(fields: [careStatusId], references: [id])
+  dealId         String?
+  deal           Deal?         @relation(fields: [dealId], references: [id])
+  storeName      String?
+  storeAddress   String?
+  isClosed       Boolean       @default(false) // đã chốt đơn
+  value          Float? // giá trị đơn hàng (doanh thu nếu đã chốt)
+  createdAt      DateTime      @default(now())
+}
+
+// Thiết lập KPI hàng tháng cho nhân viên theo từng nhóm hàng.
+// Doanh số thực tế is derived from Order at query time, never stored here.
+model KpiTarget {
+  id             String       @id @default(cuid())
+  employeeId     String
+  employee       Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  month          DateTime // first day of the target month
+  productGroupId String
+  productGroup   ProductGroup @relation(fields: [productGroupId], references: [id])
+  targetRevenue  Float
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([employeeId, month, productGroupId])
+}
+
+// Công việc (nhiệm vụ) của nhân viên gắn với một khách hàng / deal —
+// dùng để theo dõi tiến trình xử lý qua các cột Cần làm / Đang làm / Hoàn thành.
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  employeeId  String?
+  employee    Employee? @relation(fields: [employeeId], references: [id])
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  status      String    @default("Cần làm") // "Cần làm" | "Đang làm" | "Hoàn thành"
+  priority    String    @default("Bình thường") // "Thấp" | "Bình thường" | "Cao"
+  sortOrder   Int       @default(0) // vị trí trong cột sau khi kéo thả
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// Lead — khách hàng tiềm năng thô, chưa chắc thành deal. Được chấm điểm theo
+// trục độ phù hợp (fit) và trục mức tương tác (engagement) -> nhãn Nóng/Ấm/Nguội.
+model Lead {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  name            String // người liên hệ
+  companyName     String?
+  phone           String?
+  email           String?
+  title           String? // chức danh
+  taxCode         String? // mã số thuế (pháp nhân thật)
+  industry        String?
+  provinceId      String?
+  province        Province? @relation(fields: [provinceId], references: [id])
+  sourceId        String?
+  source          Source?   @relation(fields: [sourceId], references: [id])
+  campaign        String? // chiến dịch marketing
+  objective       String? // mục tiêu bán hàng đã khai
+  partnerReferred Boolean   @default(false) // do đối tác giới thiệu
+  employeeId      String?
+  employee        Employee? @relation(fields: [employeeId], references: [id])
+  status          String    @default("Mới") // Mới | Đang liên hệ | Đủ điều kiện | Đã chuyển đổi | Rác
+  sortOrder       Int       @default(0)
+
+  // điểm số (cache) do lib/scoring.ts tính
+  fitScore        Int       @default(0)
+  fitPercent      Float     @default(0)
+  engagementScore Float     @default(0)
+  fitGrade        String    @default("D") // A | B | C | D
+  engagementGrade Int       @default(4) // 1 | 2 | 3 | 4
+  label           String    @default("Nguội") // Nóng | Ấm | Nguội
+  scoredAt        DateTime?
+
+  convertedCustomerId String?
+  convertedCustomer   Customer? @relation(fields: [convertedCustomerId], references: [id])
+  convertedDealId     String?
+
+  notes      String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  activities Activity[]
+}
+
+// Deal — cơ hội bán hàng thực sự, di chuyển qua các PipelineStage.
+model Deal {
+  id                String        @id @default(cuid())
+  code              String        @unique
+  title             String
+  value             Float?
+  customerId        String?
+  customer          Customer?     @relation(fields: [customerId], references: [id])
+  contactId         String?
+  contact           Contact?      @relation(fields: [contactId], references: [id])
+  ownerId           String?
+  owner             Employee?     @relation(fields: [ownerId], references: [id])
+  stageId           String
+  stage             PipelineStage @relation(fields: [stageId], references: [id])
+  status            String        @default("Đang mở") // Đang mở | Thắng | Thua
+  probability       Int           @default(0) // % khả năng chốt (cache)
+  healthLabel       String        @default("Lạnh") // Nóng | Ấm | Lạnh
+  healthScore       Float         @default(0)
+  forecastCategory  String? // Cam kết | Khả năng cao | Tiềm năng | Rủi ro
+  closeBucket       String? // Trong tuần | Trong tháng | Quý này
+  expectedCloseDate DateTime?
+  lostReason        String?
+  wonAt             DateTime?
+  lostAt            DateTime?
+  sourceId          String?
+  source            Source?       @relation(fields: [sourceId], references: [id])
+  campaign          String?
+
+  // điểm số (cache)
+  fitScore        Int       @default(0)
+  engagementScore Float     @default(0)
+  label           String    @default("Nguội")
+  scoredAt        DateTime?
+
+  stageEnteredAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  followers  DealFollower[]
+  activities Activity[]
+  orders     Order[]
+  tasks      Task[]
+}
+
+// Theo dõi — nhân viên đang theo dõi một deal.
+model DealFollower {
+  id         String   @id @default(cuid())
+  dealId     String
+  deal       Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([dealId, employeeId])
+}
+
+// Activity — một dòng trên timeline "Lịch sử" của Deal hoặc Lead. Cũng là nguồn
+// dữ liệu cho trục mức tương tác của bộ chấm điểm.
+model Activity {
+  id         String    @id @default(cuid())
+  dealId     String?
+  deal       Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  leadId     String?
+  lead       Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  employeeId String?
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+  // note | call | email | meeting | task | checkin | document | quotation
+  // | stage_change | form_submit | chat_inbound | deal_created | won | lost
+  type       String
+  title      String
+  body       String?
+  direction  String? // in | out
+  meta       String? // JSON
+  occurredAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+
+  @@index([dealId])
+  @@index([leadId])
+}
+
+// Cấu hình chấm điểm Lead/Deal — một dòng singleton (name = "default").
+model ScoringConfig {
+  id                   String   @id @default(cuid())
+  name                 String   @unique @default("default")
+  fitWeights           String // JSON { key: weight }
+  engagementEvents     String // JSON { type: { points, halfLife, cap } }
+  fitThresholds        String // JSON { A, B, C }
+  engagementThresholds String // JSON { g1, g2, g3 }
+  labelMatrix          String // JSON 4x4 (A..D) x (1..4)
+  mode                 String   @default("fixed") // fixed | distribution
+  updatedAt            DateTime @updatedAt
+}
+
+// Nhịp công việc — định nghĩa việc lặp lại cho sales.
+model WorkRhythmTask {
+  id          String          @id @default(cuid())
+  title       String
+  category    String? // nhãn chip, vd "Báo cáo"
+  cadence     String          @default("daily") // daily | weekly
+  employeeId  String? // null = áp dụng cho tất cả
+  employee    Employee?       @relation(fields: [employeeId], references: [id])
+  channels    String? // JSON ["Facebook","Zalo"]
+  evidenceMin Int             @default(0) // "Bằng chứng ≥ N"
+  targetCount Int? // vd "Gọi chăm sóc 10 lead"
+  color       String?
+  sortOrder   Int             @default(0)
+  active      Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  logs        WorkRhythmLog[]
+}
+
+model WorkRhythmLog {
+  id            String         @id @default(cuid())
+  taskId        String
+  task          WorkRhythmTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  employeeId    String
+  employee      Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date          DateTime // nửa đêm địa phương của ngày
+  done          Boolean        @default(false)
+  doneCount     Int            @default(0)
+  evidenceCount Int            @default(0)
+  note          String?
+  completedAt   DateTime?
+
+  @@unique([taskId, employeeId, date])
+}
