@@ -18,3 +18,6 @@ export function clientAuth() {
 }
 
 export const googleProvider = new GoogleAuthProvider();
+
+// Always let the operator choose an account when switching CRM users.
+googleProvider.setCustomParameters({ prompt: "select_account" });
