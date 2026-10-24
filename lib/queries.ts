@@ -1,3 +1,4 @@
+import { buildKpiRows } from "./kpi";
 import { prisma } from "./prisma";
 import { monthRange, monthValue, daysSince, initials } from "./format";
 import { parseScoringConfig } from "./scoring";
@@ -343,23 +344,9 @@ export async function getKpiTable(monthStr: string) {
     where: { ...salesVisibilityWhere(ctx), date: { gte: start, lt: end }, isClosed: true },
     _sum: { value: true },
   });
-  const actualMap = new Map(actuals.map((a) => [`${a.employeeId}|${a.productGroupId}`, a._sum.value ?? 0]));
+  const rows = buildKpiRows(targets, actuals.map(a => ({ employeeId: a.employeeId, productGroupId: a.productGroupId, actual: a._sum.value ?? 0 })), employees, productGroups);
 
-  const rows = targets.map((t) => {
-    const actual = actualMap.get(`${t.employeeId}|${t.productGroupId}`) ?? 0;
-    return {
-      id: t.id,
-      employeeId: t.employeeId,
-      employeeName: t.employee.name,
-      productGroupId: t.productGroupId,
-      productGroupName: t.productGroup?.name ?? "Tất cả nhóm hàng",
-      target: t.targetRevenue,
-      actual,
-      rate: t.targetRevenue > 0 ? actual / t.targetRevenue : 0,
-    };
-  });
-
-  const byEmployee = new Map<string, { name: string; target: number; actual: number }>();
+  const byEmployee = new Map<string | null, { name: string; target: number; actual: number }>();
   for (const r of rows) {
     const cur = byEmployee.get(r.employeeId) ?? { name: r.employeeName, target: 0, actual: 0 };
     cur.target += r.target;

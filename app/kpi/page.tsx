@@ -22,6 +22,7 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
 
   const totalTarget = rows.reduce((s, r) => s + r.target, 0);
   const totalActual = rows.reduce((s, r) => s + r.actual, 0);
+  const withoutTarget = rows.filter(r => !r.hasTarget);
   const overallRate = totalTarget > 0 ? totalActual / totalTarget : 0;
 
   return (
@@ -32,12 +33,15 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
         actions={<MonthPicker months={months} current={month} />}
       />
       <div className="p-6 space-y-6">
+        {withoutTarget.length > 0 && <p role="status" className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+          {withoutTarget.length} nhóm doanh số chưa có chỉ tiêu, tổng {formatCurrency(withoutTarget.reduce((s,r)=>s+r.actual,0))}. Đã tính đủ vào doanh số thực tế và tổng chung. Quản trị viên cần đặt chỉ tiêu cho các nhóm này; hệ thống không tự tạo chỉ tiêu.
+        </p>}
         <div className="grid grid-cols-3 gap-4">
           <StatCard label="Tổng KPI mục tiêu" value={formatCurrency(totalTarget)} />
           <StatCard label="Tổng doanh số thực tế" value={formatCurrency(totalActual)} accent="indigo" />
           <StatCard
             label="Tỷ lệ đạt KPI chung"
-            value={new Intl.NumberFormat("vi-VN", { style: "percent", maximumFractionDigits: 1 }).format(overallRate)}
+            value={totalTarget > 0 ? new Intl.NumberFormat("vi-VN", { style: "percent", maximumFractionDigits: 1 }).format(overallRate) : "Chưa có chỉ tiêu"}
             accent={overallRate >= 1 ? "emerald" : overallRate >= 0.7 ? "amber" : "rose"}
           />
         </div>
@@ -82,7 +86,8 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
                   name="targetRevenue"
                   type="number"
                   min={0}
-                  step={1000}
+                  max={1_000_000_000_000}
+                  step={1}
                   required
                   placeholder="VD: 200000"
                   className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
@@ -118,13 +123,13 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
                 <tr key={r.id} className="border-t border-slate-100">
                   <td className="px-4 py-2.5 text-slate-800 font-medium">{r.employeeName}</td>
                   <td className="px-4 py-2.5 text-slate-600">{r.productGroupName}</td>
-                  <td className="px-4 py-2.5 text-right text-slate-700">{formatCurrency(r.target)}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-700">{r.hasTarget ? formatCurrency(r.target) : <span className="text-amber-700">Chưa có chỉ tiêu</span>}</td>
                   <td className="px-4 py-2.5 text-right text-slate-900 font-medium">{formatCurrency(r.actual)}</td>
                   <td className="px-4 py-2.5">
-                    <ProgressBar rate={r.rate} />
+                    {r.hasTarget && r.target > 0 ? <ProgressBar rate={r.rate} /> : <span className="text-xs text-slate-500">Chưa tính tỷ lệ</span>}
                   </td>
                   <td className="px-4 py-2.5 text-right">
-                    {canEditKpi && (
+                    {canEditKpi && r.hasTarget && (
                       <form action={deleteKpiTarget.bind(null, r.id)}>
                         <button type="submit" className="text-xs text-slate-400 hover:text-rose-600">
                           Xoá

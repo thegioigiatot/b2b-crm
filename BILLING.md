@@ -35,3 +35,9 @@ DATABASE_URL=postgresql://USER@localhost:5432/crm_test DIRECT_URL=postgresql://U
 ```
 
 Test dùng PostgreSQL thật, action và DAL thật. Chỉ mô phỏng cookie request, revalidate và redirect của Next khi chạy ngoài web server; không giả mạo Google/Firebase đăng nhập. Tạo hai User SALES/Employee tạm, kiểm đọc/ghi/xóa chéo và kiểm idempotency đồng thời; dọn dữ liệu do test tạo trong finally. Không chạy trên production. Đăng nhập OAuth thật của hai nhân viên vẫn cần chủ tài khoản Google tương ứng thực hiện.
+
+## KPI cho dịch vụ chưa đặt chỉ tiêu
+
+Trang KPI lấy hợp của nhóm có chỉ tiêu và nhóm có doanh số thực thu. Nhóm chưa có KpiTarget vẫn được tính đủ trong doanh số tổng/biểu đồ, có cảnh báo và không hiển thị tỷ lệ phần trăm riêng cho nhóm đó. Không tự thêm chỉ tiêu 0 vào DB; chỉ tiêu 0 đặt chủ động được phân biệt với chưa đặt. Dữ liệu lịch sử chưa gán nhân viên/dịch vụ vẫn hiển thị để đối soát. Thêm hoặc xóa chỉ tiêu không thay đổi doanh thu đã thu. Mục tiêu tổng bằng 0 được hiển thị “Chưa có chỉ tiêu”, không chia cho 0. Phạm vi SALES áp dụng trước khi tổng hợp.
+
+Kiểm thử hồi quy: `node --import tsx --test tests/kpi.test.cjs` cùng bộ tích hợp PostgreSQL. Thay đổi này không cần migration và không sửa mục tiêu/dữ liệu thu tiền hiện có.

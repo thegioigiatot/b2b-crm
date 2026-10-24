@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { parseKpiInput } from "./kpi";
 import { prisma } from "./prisma";
 import { requireUser, requirePerm, can, canDelete, canEdit, isPrivileged } from "./auth";
 
@@ -24,9 +25,12 @@ export async function setKpiTarget(formData: FormData) {
   const employeeId = String(formData.get("employeeId"));
   const month = String(formData.get("month")); // yyyy-mm
   const productGroupId = String(formData.get("productGroupId"));
-  const targetRevenue = num(formData.get("targetRevenue")) ?? 0;
-  const [y, m] = month.split("-").map(Number);
-  const monthDate = new Date(y, m - 1, 1);
+  const { targetRevenue, monthDate } = parseKpiInput(month, String(formData.get("targetRevenue") ?? ""));
+  const [employee, group] = await Promise.all([
+    prisma.employee.findUnique({ where: { id: employeeId }, select: { id: true } }),
+    prisma.productGroup.findUnique({ where: { id: productGroupId }, select: { id: true } }),
+  ]);
+  if (!employee || !group) throw new Error("Chọn nhân viên và dịch vụ hợp lệ.");
 
   await prisma.kpiTarget.upsert({
     where: { employeeId_month_productGroupId: { employeeId, month: monthDate, productGroupId } },

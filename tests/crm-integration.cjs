@@ -57,6 +57,17 @@ async function main() {
   await check('Concurrent payment retry creates one receipt and one ledger order',async()=>{const ids=await Promise.all([billing.collectPayment(ctxA,pay),billing.collectPayment(ctxA,pay)]);assert.equal(ids[0],ids[1]);assert.equal(await db.order.count({where:{paymentId:ids[0]}}),1);});
   await check('Duplicate bank reference / changed idempotency payload / overpayment rejected',async()=>{await deny(()=>billing.collectPayment(ctxA,{...pay,receiptKey:tag+'dup'}));await deny(()=>billing.collectPayment(ctxA,{...pay,agencyAmount:1}));await deny(()=>billing.collectPayment(ctxA,{...pay,receiptKey:tag+'over',reference:'over',agencyAmount:7000000}));});
   await check('Two installments settle agency/media/VAT separately',async()=>{await billing.collectPayment(ctxA,{...pay,receiptKey:tag+'receipt2',reference:tag+'bank2',agencyAmount:6000000,mediaAmount:10000000,vatAmount:600000});const periods=await billing.billingForDeal(ctxA,da.id);assert.equal(periods.periods[0].payments.length,2);const orders=await db.order.findMany({where:{dealId:da.id}});assert.equal(orders.reduce((s,o)=>s+o.value,0),10000000);assert.equal((await q.getDashboardData('2026-10')).totals.revenue,10000000);});
+  await check('KPI includes collected fees before any target and stays single after setting a target',async()=>{
+    let k = await q.getKpiTable('2026-10');
+    assert.equal(k.rows.reduce((s,r)=>s+r.actual,0),10000000);
+    assert.equal(k.rows.find(r=>r.productGroupId===product.id).hasTarget,false);
+    await db.kpiTarget.create({data:{employeeId:ea.id,productGroupId:product.id,month:new Date(2026,9,1),targetRevenue:12000000}});
+    k=await q.getKpiTable('2026-10');
+    assert.equal(k.rows.reduce((s,r)=>s+r.actual,0),10000000);
+    assert.equal(k.rows.filter(r=>r.productGroupId===product.id).length,1);
+    assert.equal(k.employeeSummary[0].actual,10000000);
+    assert.equal(k.rows[0].hasTarget,true);
+  });
   await check('SALES B cannot collect / renew / read SALES A billing',async()=>{await deny(()=>billing.collectPayment(ctxB,{...pay,receiptKey:tag+'foreign',reference:'foreign'}));await deny(()=>billing.changeContract(ctxB,cid,'2026-05-31','ACTIVE'));await deny(()=>billing.billingForDeal(ctxB,da.id));});
   await check('Ledger order cannot be deleted separately from receipt',async()=>{const o=await db.order.findFirst({where:{dealId:da.id}});await deny(()=>actions.deleteOrder(o.id));});
   await check('Monthly renewal retains Jan 31 anchor and blocks expired cycle',async()=>{await billing.issuePeriod(ctxA,cid,'2026-02-28',1);const p=await db.billingPeriod.findUnique({where:{contractId_cycle:{contractId:cid,cycle:1}}});assert.equal(p.startsOn.toISOString().slice(0,10),'2026-02-28');assert.equal(p.endsOn.toISOString().slice(0,10),'2026-03-31');await deny(()=>billing.issuePeriod(ctxA,cid,'2026-03-31',2));await billing.changeContract(ctxA,cid,'2026-04-30','ACTIVE');await billing.issuePeriod(ctxA,cid,'2026-03-31',2);});
@@ -74,6 +85,7 @@ async function cleanup() {
   await db.deal.deleteMany({where:{id:{in:ids}}});
   await db.contact.deleteMany({where:{customerId:{in:[ca?.id,cb?.id].filter(Boolean)}}});
   await db.customer.deleteMany({where:{code:{startsWith:tag}}});
+  await db.kpiTarget.deleteMany({where:{employeeId:{in:[ea?.id,eb?.id].filter(Boolean)}}});
   await db.user.deleteMany({where:{email:{startsWith:tag}}});
   await db.employee.deleteMany({where:{code:{startsWith:tag}}});
   if(stage)await db.pipelineStage.delete({where:{id:stage.id}});if(product)await db.productGroup.delete({where:{id:product.id}});
