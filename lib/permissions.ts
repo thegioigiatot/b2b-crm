@@ -5,6 +5,8 @@ export const ROLES: Role[] = ["ADMIN", "MANAGER", "SALES"];
 
 export type PermKey =
   // Tầm nhìn dữ liệu
+  | "viewAllCustomers"
+  | "viewAllSales"
   | "viewAllDeals"
   | "viewAllLeads"
   | "viewAllTasks"
@@ -28,6 +30,8 @@ export const PERM_GROUPS: { title: string; keys: { key: PermKey; label: string; 
   {
     title: "Tầm nhìn dữ liệu",
     keys: [
+      { key: "viewAllCustomers", label: "Xem toàn bộ khách hàng và Contact" },
+      { key: "viewAllSales", label: "Xem toàn bộ doanh số và hợp đồng" },
       { key: "viewAllDeals", label: "Xem toàn bộ deal", hint: "Tắt = chỉ deal của mình hoặc đang theo dõi" },
       { key: "viewAllLeads", label: "Xem toàn bộ lead", hint: "Tắt = chỉ lead mình phụ trách" },
       { key: "viewAllTasks", label: "Xem toàn bộ công việc" },

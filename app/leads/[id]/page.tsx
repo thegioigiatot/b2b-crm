@@ -9,7 +9,7 @@ import ActivityTimeline from "@/components/deal/ActivityTimeline";
 import { getLeadDetail } from "@/lib/queries";
 import { deleteLead } from "@/lib/lead-actions";
 import { computeFit, fitBreakdown, type FitSubject } from "@/lib/scoring";
-import { requireUser, can } from "@/lib/auth";
+import { requireUser, canRead } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const { lead, provinces, sources, employees, config } = await getLeadDetail(id);
   if (!lead) notFound();
-  if (!can(ctx, "record:read", { employeeId: lead.employeeId })) redirect("/403");
+  if (!canRead(ctx, "lead", { employeeId: lead.employeeId })) redirect("/403");
 
   const subject: FitSubject = {
     phone: lead.phone,

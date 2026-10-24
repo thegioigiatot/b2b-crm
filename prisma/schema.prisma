@@ -54,7 +54,7 @@ model User {
   extraPerms  String? // JSON ghi đè quyền cho riêng user: { key: true|false }
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
 }
 
 // Bộ quyền cho mỗi vai trò (ADMIN | MANAGER | SALES). Sửa được ở /admin/roles.
@@ -186,27 +186,30 @@ model CustomerDocument {
 
 // Dữ liệu doanh số bán hàng — one row per sales interaction / order.
 model Order {
-  id             String        @id @default(cuid())
+  id             String          @id @default(cuid())
   date           DateTime
   customerId     String?
-  customer       Customer?     @relation(fields: [customerId], references: [id])
+  customer       Customer?       @relation(fields: [customerId], references: [id])
   employeeId     String?
-  employee       Employee?     @relation(fields: [employeeId], references: [id])
+  employee       Employee?       @relation(fields: [employeeId], references: [id])
   productGroupId String?
-  productGroup   ProductGroup? @relation(fields: [productGroupId], references: [id])
+  productGroup   ProductGroup?   @relation(fields: [productGroupId], references: [id])
   provinceId     String?
-  province       Province?     @relation(fields: [provinceId], references: [id])
+  province       Province?       @relation(fields: [provinceId], references: [id])
   sourceId       String?
-  source         Source?       @relation(fields: [sourceId], references: [id])
+  source         Source?         @relation(fields: [sourceId], references: [id])
   careStatusId   String?
-  careStatus     CareStatus?   @relation(fields: [careStatusId], references: [id])
+  careStatus     CareStatus?     @relation(fields: [careStatusId], references: [id])
   dealId         String?
-  deal           Deal?         @relation(fields: [dealId], references: [id])
+  deal           Deal?           @relation(fields: [dealId], references: [id])
   storeName      String?
   storeAddress   String?
-  isClosed       Boolean       @default(false) // đã chốt đơn
+  isClosed       Boolean         @default(false) // đã chốt đơn
   value          Float? // giá trị đơn hàng (doanh thu nếu đã chốt)
-  createdAt      DateTime      @default(now())
+  bookingKey     String?         @unique
+  paymentId      String?         @unique
+  payment        ServicePayment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  createdAt      DateTime        @default(now())
 }
 
 // Thiết lập KPI hàng tháng cho nhân viên theo từng nhóm hàng.
@@ -331,6 +334,7 @@ model Deal {
   activities Activity[]
   orders     Order[]
   tasks      Task[]
+  contract   ServiceContract?
 }
 
 // Theo dõi — nhân viên đang theo dõi một deal.
@@ -414,4 +418,54 @@ model WorkRhythmLog {
   completedAt   DateTime?
 
   @@unique([taskId, employeeId, date])
+}
+
+// A commercial commitment is separate from cash collected. Currency: whole VND.
+model ServiceContract {
+  id             String          @id @default(cuid())
+  dealId         String          @unique
+  deal           Deal            @relation(fields: [dealId], references: [id], onDelete: Restrict)
+  title          String
+  cadenceMonths  Int             @default(0) // 0 = one-off; 1/3/6/12 = recurring
+  startsOn       DateTime        @db.Date
+  endsOn         DateTime?       @db.Date // exclusive; renewal is explicit
+  agencyFee      Decimal         @db.Decimal(18, 0)
+  mediaBudget    Decimal         @db.Decimal(18, 0)
+  vatRate        Decimal         @db.Decimal(5, 2) // applied to agency fee, not pass-through media
+  productGroupId String
+  status         String          @default("ACTIVE")
+  createdAt      DateTime        @default(now())
+  periods        BillingPeriod[]
+}
+
+model BillingPeriod {
+  id          String           @id @default(cuid())
+  contractId  String
+  contract    ServiceContract  @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  cycle       Int
+  startsOn    DateTime         @db.Date
+  endsOn      DateTime?        @db.Date
+  dueOn       DateTime         @db.Date
+  agencyFee   Decimal          @db.Decimal(18, 0)
+  mediaBudget Decimal          @db.Decimal(18, 0)
+  vatAmount   Decimal          @db.Decimal(18, 0)
+  createdAt   DateTime         @default(now())
+  payments    ServicePayment[]
+
+  @@unique([contractId, cycle])
+}
+
+model ServicePayment {
+  id           String        @id @default(cuid())
+  periodId     String
+  period       BillingPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  receiptKey   String        @unique
+  paidOn       DateTime      @db.Date
+  agencyAmount Decimal       @db.Decimal(18, 0)
+  mediaAmount  Decimal       @db.Decimal(18, 0)
+  vatAmount    Decimal       @db.Decimal(18, 0)
+  reference    String
+  createdBy    String
+  createdAt    DateTime      @default(now())
+  order        Order?
 }

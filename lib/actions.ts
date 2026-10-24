@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "./prisma";
-import { requireUser, requirePerm, can, canDelete, isPrivileged } from "./auth";
+import { requireUser, requirePerm, can, canDelete, canEdit, isPrivileged } from "./auth";
+
+import { assertCustomerAccess, assertDealAccess, assignedEmployee } from "./record-access";
 
 function str(v: FormDataEntryValue | null) {
   const s = (v ?? "").toString().trim();
@@ -44,8 +46,9 @@ export async function deleteKpiTarget(id: string) {
 
 // ---------- Customers ----------
 export async function upsertCustomer(formData: FormData) {
-  await requireUser();
+  const ctx = await requireUser();
   const id = str(formData.get("id"));
+  if (id) await assertCustomerAccess(ctx, id, true);
   const data = {
     code: String(formData.get("code")).trim(),
     name: String(formData.get("name")).trim(),
@@ -57,7 +60,7 @@ export async function upsertCustomer(formData: FormData) {
     taxCode: str(formData.get("taxCode")) ?? null,
     industry: str(formData.get("industry")) ?? null,
     sourceId: str(formData.get("sourceId")) ?? null,
-    employeeId: str(formData.get("employeeId")) ?? null,
+    employeeId: assignedEmployee(ctx, str(formData.get("employeeId"))),
     careStatusId: str(formData.get("careStatusId")) ?? null,
     isNew: formData.get("isNew") === "on",
     storeName: str(formData.get("storeName")),
@@ -73,15 +76,18 @@ export async function upsertCustomer(formData: FormData) {
 }
 
 export async function deleteCustomer(id: string) {
-  await requirePerm("editAnyRecord");
+  const ctx = await requireUser();
+  const customer = await assertCustomerAccess(ctx, id, true);
+  if (!canDelete(ctx, customer)) throw new Error("Không có quyền xoá khách hàng.");
   await prisma.customer.delete({ where: { id } });
   revalidatePath("/customers", "layout");
   redirect("/customers");
 }
 
 export async function addCareLog(formData: FormData) {
-  await requireUser();
+  const ctx = await requireUser();
   const customerId = String(formData.get("customerId"));
+  await assertCustomerAccess(ctx, customerId, true);
   const date = str(formData.get("date"));
   await prisma.careLog.create({
     data: {
@@ -101,31 +107,68 @@ export async function addCareLog(formData: FormData) {
 
 // ---------- Orders / Sales ----------
 export async function createOrder(formData: FormData) {
-  await requireUser();
+  const ctx = await requireUser();
   const isClosed = formData.get("isClosed") === "on";
   const value = num(formData.get("value"));
-  await prisma.order.create({
-    data: {
-      date: new Date(String(formData.get("date"))),
-      customerId: str(formData.get("customerId")) ?? null,
-      employeeId: str(formData.get("employeeId")) ?? null,
-      productGroupId: str(formData.get("productGroupId")) ?? null,
-      provinceId: str(formData.get("provinceId")) ?? null,
-      sourceId: str(formData.get("sourceId")) ?? null,
-      careStatusId: str(formData.get("careStatusId")) ?? null,
-      storeName: str(formData.get("storeName")),
-      storeAddress: str(formData.get("storeAddress")),
-      isClosed,
-      value: isClosed ? (value ?? 0) : null,
-    },
+  const dealId = str(formData.get("dealId"));
+  const customerId = str(formData.get("customerId"));
+  if (customerId) await assertCustomerAccess(ctx, customerId, true);
+  const employeeId = assignedEmployee(ctx, str(formData.get("employeeId")));
+  if (isClosed && (!dealId || !value || !Number.isSafeInteger(value) || value < 0)) throw new Error("Giao dịch thu tiền cần deal và phí dịch vụ VND lớn hơn 0.");
+  const date = new Date(String(formData.get("date")));
+  if (!Number.isFinite(+date)) throw new Error("Ngày không hợp lệ.");
+  await prisma.$transaction(async tx => {
+    if (dealId) {
+      await assertDealAccess(ctx, dealId, true);
+      await tx.$queryRaw`SELECT id FROM "Deal" WHERE id = ${dealId} FOR UPDATE`;
+      const deal = await tx.deal.findUniqueOrThrow({ where: { id: dealId } });
+      if (deal.customerId !== customerId || deal.ownerId !== employeeId) throw new Error("Khách hàng và nhân viên phải khớp deal.");
+      if (isClosed && deal.status !== "Thắng") throw new Error("Chỉ ghi thu tiền cho deal thắng.");
+      if (await tx.serviceContract.findUnique({ where: { dealId } })) throw new Error("Deal có hợp đồng; ghi thu theo kỳ trong chi tiết deal.");
+      if (isClosed && await tx.order.findFirst({ where: { dealId, isClosed: true } })) return;
+    }
+    const key = str(formData.get("bookingKey"));
+    if (!key || !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new Error("Tải lại biểu mẫu để ghi giao dịch.");
+    await tx.order.upsert({
+      where: { bookingKey: isClosed ? `deal:${dealId}` : `interaction:${key}` },
+      update: {},
+      create: {
+        date, customerId: customerId ?? null, employeeId, dealId: dealId ?? null,
+        bookingKey: isClosed ? `deal:${dealId}` : `interaction:${key}`,
+        productGroupId: str(formData.get("productGroupId")) ?? null,
+        provinceId: str(formData.get("provinceId")) ?? null,
+        sourceId: str(formData.get("sourceId")) ?? null,
+        careStatusId: str(formData.get("careStatusId")) ?? null,
+        storeName: str(formData.get("storeName")), storeAddress: str(formData.get("storeAddress")),
+        isClosed, value: isClosed ? value : null,
+      },
+    });
   });
-  revalidatePath("/sales");
-  revalidatePath("/");
-  revalidatePath("/kpi");
+  revalidatePath("/sales"); revalidatePath("/"); revalidatePath("/kpi"); revalidatePath("/deals", "layout");
+}
+
+// Reconcile historical transactions without creating revenue a second time.
+export async function linkOrderToDeal(formData: FormData) {
+  const ctx = await requireUser();
+  const id = String(formData.get("orderId"));
+  const dealId = String(formData.get("dealId"));
+  await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
+    const order = await tx.order.findUniqueOrThrow({ where: { id } });
+    if (!canEdit(ctx, order)) throw new Error("Không có quyền với giao dịch.");
+    const deal = await assertDealAccess(ctx, dealId, true);
+    if (order.paymentId || order.dealId && order.dealId !== dealId || order.customerId !== deal.customerId || order.employeeId !== deal.ownerId || deal.status !== "Thắng") throw new Error("Giao dịch không khớp khách hàng/nhân viên/deal thắng.");
+    if (await tx.serviceContract.findUnique({ where: { dealId } })) throw new Error("Đối chiếu giao dịch cũ trước khi tạo hợp đồng.");
+    await tx.order.update({ where: { id }, data: { dealId } });
+  });
+  revalidatePath("/sales"); revalidatePath("/deals", "layout");
 }
 
 export async function deleteOrder(id: string) {
-  await requireUser();
+  const ctx = await requireUser();
+  const order = await prisma.order.findUnique({ where: { id } });
+  if (!order || !canDelete(ctx, order)) throw new Error("Không có quyền xoá doanh số.");
+  if (order.paymentId) throw new Error("Giao dịch thanh toán phải được điều chỉnh trong sổ thu.");
   await prisma.order.delete({ where: { id } });
   revalidatePath("/sales");
   revalidatePath("/customers", "layout");
@@ -134,7 +177,8 @@ export async function deleteOrder(id: string) {
 
 // ---------- Sale Pipeline ----------
 export async function moveCustomerStage(customerId: string, careStatusId: string) {
-  await requireUser();
+  const ctx = await requireUser();
+  await assertCustomerAccess(ctx, customerId, true);
   await prisma.customer.update({ where: { id: customerId }, data: { careStatusId } });
   revalidatePath("/deals");
   revalidatePath("/customers", "layout");
@@ -153,6 +197,10 @@ async function assertTaskWrite(taskId: string) {
 export async function createTask(formData: FormData) {
   const ctx = await requireUser();
   const dueDate = str(formData.get("dueDate"));
+  const customerId = str(formData.get("customerId"));
+  const dealId = str(formData.get("dealId"));
+  if (customerId) await assertCustomerAccess(ctx, customerId, true);
+  if (dealId) await assertDealAccess(ctx, dealId, true);
   // SALES chỉ giao việc cho chính mình.
   const employeeId = isPrivileged(ctx)
     ? (str(formData.get("employeeId")) ?? null)
@@ -190,7 +238,8 @@ export async function moveTask(taskId: string, status: string, orderedIds: strin
     where: { id: taskId },
     data: { status, completedAt: status === "Hoàn thành" ? new Date() : null },
   });
-  const ids = orderedIds.length ? orderedIds : [taskId];
+  const ids = [...new Set(orderedIds.length ? orderedIds : [taskId])];
+  for (const id of ids) await assertTaskWrite(id);
   await prisma.$transaction(
     ids.map((id, i) => prisma.task.update({ where: { id }, data: { sortOrder: i } })),
   );

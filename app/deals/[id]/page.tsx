@@ -1,3 +1,4 @@
+import DealBilling from "@/components/deal/DealBilling";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
@@ -15,7 +16,7 @@ import { getDealDetail } from "@/lib/queries";
 import { updateDeal, deleteDeal } from "@/lib/deal-actions";
 import { createTask } from "@/lib/actions";
 import { formatCurrency, formatDate, daysUntil } from "@/lib/format";
-import { requireUser, can, hasPerm } from "@/lib/auth";
+import { requireUser, canRead, hasPerm } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const { deal, stages, employees, customerContacts } = await getDealDetail(id);
   if (!deal) notFound();
-  if (!can(ctx, "record:read", { ownerId: deal.ownerId, followers: deal.followers.map((f) => ({ employeeId: f.employeeId })) })) {
+  if (!canRead(ctx, "deal", { ownerId: deal.ownerId, followers: deal.followers.map((f) => ({ employeeId: f.employeeId })) })) {
     redirect("/403");
   }
   const privileged = hasPerm(ctx, "changeDealOwner");
@@ -60,6 +61,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
       />
 
       <div className="p-6 space-y-5">
+        <DealBilling ctx={ctx} dealId={id} />
         {/* top summary */}
         <div className="card card-pad">
           <div className="flex flex-wrap items-start justify-between gap-4">

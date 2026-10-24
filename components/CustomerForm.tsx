@@ -1,13 +1,16 @@
+import { requireUser } from "@/lib/auth";
 import { upsertCustomer } from "@/lib/actions";
 import type { Customer, Employee, Province, Source, CareStatus } from "@prisma/client";
 
-export default function CustomerForm({
+export default async function CustomerForm({
   customer,
   master,
 }: {
   customer?: Customer | null;
   master: { employees: Employee[]; provinces: Province[]; sources: Source[]; careStatuses: CareStatus[] };
 }) {
+  const ctx = await requireUser();
+  const employees = master.employees.filter(e => ctx.perms.editAnyRecord || e.id === ctx.employee?.id);
   const dobValue = customer?.dob ? new Date(customer.dob).toISOString().slice(0, 10) : "";
 
   return (
@@ -63,9 +66,9 @@ export default function CustomerForm({
           </select>
         </Field>
         <Field label="Nhân viên phụ trách">
-          <select name="employeeId" defaultValue={customer?.employeeId ?? ""} className="input">
+          <select name="employeeId" defaultValue={customer?.employeeId ?? ctx.employee?.id ?? ""} className="input">
             <option value="">-</option>
-            {master.employees.map((e) => (
+            {employees.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.name}
               </option>

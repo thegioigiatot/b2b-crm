@@ -1,3 +1,6 @@
+import { prisma } from "@/lib/prisma";
+import { dealVisibilityWhere } from "@/lib/auth";
+import { linkOrderToDeal } from "@/lib/actions";
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import { getOrders, getMasterData, getAvailableMonths } from "@/lib/queries";
@@ -11,9 +14,11 @@ export default async function SalesPage({
 }: {
   searchParams: Promise<{ month?: string; employeeId?: string; productGroupId?: string; statusId?: string }>;
 }) {
-  await requireUser();
+  const ctx = await requireUser();
   const sp = await searchParams;
   const [orders, master, months] = await Promise.all([getOrders(sp), getMasterData(), getAvailableMonths()]);
+  const wonDeals = await prisma.deal.findMany({ where: { AND: [dealVisibilityWhere(ctx), { status: "Thắng" }] }, include: { orders: { where: { isClosed: true }, select: { id: true } } } });
+  const missing = wonDeals.filter(d=>!d.orders.length);
   const totalRevenue = orders.filter((o) => o.isClosed).reduce((s, o) => s + (o.value ?? 0), 0);
 
   return (
@@ -28,6 +33,9 @@ export default async function SalesPage({
         }
       />
       <div className="p-6 space-y-4">
+        <p className="text-sm text-slate-500">Phí dịch vụ đã thu, không gồm VAT và media. Giao dịch cũ giữ nguyên số liệu cho đến khi đối chiếu.</p>
+        {missing.length > 0 && <div className="rounded bg-amber-50 p-3 text-sm text-amber-800">{missing.length} deal thắng chưa ghi nhận thu tiền: {missing.map(d=><Link key={d.id} className="underline mr-3" href={`/deals/${d.id}`}>{d.code} · {d.title}</Link>)}</div>}
+
         <form className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3">
           <select name="month" defaultValue={sp.month ?? ""} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm">
             <option value="">Tất cả các tháng</option>
@@ -76,7 +84,7 @@ export default async function SalesPage({
                 <th className="text-left font-medium px-4 py-2.5">Nhân viên</th>
                 <th className="text-left font-medium px-4 py-2.5">Tỉnh/thành</th>
                 <th className="text-left font-medium px-4 py-2.5">Trạng thái</th>
-                <th className="text-right font-medium px-4 py-2.5">Giá trị</th>
+                <th className="text-right font-medium px-4 py-2.5">Phí đã thu</th><th className="text-left font-medium px-4 py-2.5">Deal / Đối chiếu</th>
               </tr>
             </thead>
             <tbody>
@@ -97,11 +105,12 @@ export default async function SalesPage({
                   <td className="px-4 py-2.5 text-slate-500">{o.province?.name ?? "-"}</td>
                   <td className="px-4 py-2.5 text-slate-500">{o.careStatus?.name ?? "-"}</td>
                   <td className="px-4 py-2.5 text-right font-medium text-slate-900">{o.isClosed ? formatCurrency(o.value) : "-"}</td>
+                  <td className="px-4 py-2.5">{o.deal ? <Link className="text-indigo-600" href={`/deals/${o.deal.id}`}>{o.deal.code}</Link> : <form action={linkOrderToDeal} className="flex gap-1"><input type="hidden" name="orderId" value={o.id}/><select name="dealId" className="input" required><option value="">Chọn deal khớp</option>{wonDeals.filter(d=>d.customerId===o.customerId && d.ownerId===o.employeeId).map(d=><option key={d.id} value={d.id}>{d.code}</option>)}</select><button className="btn btn-ghost btn-sm">Liên kết</button></form>}</td>
                 </tr>
               ))}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
                     Không có giao dịch nào
                   </td>
                 </tr>

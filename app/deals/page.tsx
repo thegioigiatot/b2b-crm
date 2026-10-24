@@ -1,3 +1,4 @@
+import { customerVisibilityWhere } from "@/lib/auth";
 import Link from "next/link";
 import clsx from "clsx";
 import PageHeader from "@/components/PageHeader";
@@ -39,7 +40,7 @@ export default async function DealsPage({
     view === "board" ? getPipelineBoard({ ownerId: sp.ownerId }, ctx) : Promise.resolve(null),
     getMasterData(),
     getStages(),
-    prisma.customer.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
+    prisma.customer.findMany({ where: customerVisibilityWhere(await requireUser()), orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
     prisma.contact.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, customerId: true } }),
   ]);
   const openStages = stages.filter((s) => !s.isWon && !s.isLost);

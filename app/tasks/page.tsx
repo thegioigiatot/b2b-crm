@@ -1,3 +1,4 @@
+import { customerVisibilityWhere } from "@/lib/auth";
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import ProgressBar from "@/components/ProgressBar";
@@ -22,7 +23,7 @@ export default async function TasksPage({
     getTasks({ employeeId: privileged ? sp.employeeId : undefined }, ctx),
     getTaskProgressByEmployee(),
     getMasterData(),
-    prisma.customer.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
+    prisma.customer.findMany({ where: customerVisibilityWhere(await requireUser()), orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
     prisma.deal.findMany({ orderBy: { updatedAt: "desc" }, select: { id: true, title: true }, take: 100 }),
   ]);
 

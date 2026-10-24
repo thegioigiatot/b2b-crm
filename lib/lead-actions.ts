@@ -7,6 +7,8 @@ import { rescoreLead, rescoreDeal } from "./scoring-actions";
 import { nextCode } from "./codes";
 import { requireUser, can, canDelete, hasPerm, isPrivileged, type AuthContext } from "./auth";
 
+import { assertCustomerAccess } from "./record-access";
+
 function str(v: FormDataEntryValue | null) {
   const s = (v ?? "").toString().trim();
   return s.length ? s : undefined;
@@ -96,6 +98,7 @@ export async function convertLead(id: string, formData: FormData) {
   if (lead.convertedCustomerId) redirect(`/customers/${lead.convertedCustomerId}`);
 
   let customer = lead.phone ? await prisma.customer.findFirst({ where: { phone: lead.phone } }) : null;
+  if (customer) await assertCustomerAccess(ctx, customer.id, true);
   if (!customer) {
     const count = await prisma.customer.count();
     customer = await prisma.customer.create({

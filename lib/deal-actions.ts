@@ -5,7 +5,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "./prisma";
 import { rescoreDeal } from "./scoring-actions";
 import { nextCode } from "./codes";
-import { requireUser, can, canDelete, hasPerm, isPrivileged, type AuthContext } from "./auth";
+import { requireUser, can, canDelete, hasPerm, type AuthContext } from "./auth";
+
+import { assertCustomerAccess, assertContactAccess, assertContactMatches, assignedEmployee } from "./record-access";
 
 function str(v: FormDataEntryValue | null) {
   const s = (v ?? "").toString().trim();
@@ -48,13 +50,15 @@ export async function createDeal(formData: FormData) {
   const ctx = await requireUser();
   const customerId = str(formData.get("customerId"));
   const contactId = str(formData.get("contactId"));
+  if (customerId) await assertCustomerAccess(ctx, customerId, true);
+  await assertContactMatches(ctx, contactId, customerId);
   const title = str(formData.get("title"));
   if (!title) return;
   const stageId = str(formData.get("stageId")) ?? (await firstOpenStageId());
   if (!stageId) throw new Error("Chưa có giai đoạn pipeline nào.");
 
   // SALES luôn sở hữu deal mình tạo; ADMIN/MANAGER được chọn.
-  const ownerId = isPrivileged(ctx) ? (str(formData.get("ownerId")) ?? null) : (ctx.employee?.id ?? null);
+  const ownerId = assignedEmployee(ctx, str(formData.get("ownerId")));
 
   const deal = await prisma.deal.create({
     data: {
@@ -85,7 +89,10 @@ export async function createDeal(formData: FormData) {
 
 export async function updateDeal(id: string, formData: FormData) {
   const ctx = await requireUser();
-  await assertDealWrite(ctx, id);
+  const existing = await assertDealWrite(ctx, id);
+  const customerId = formData.has("customerId") ? str(formData.get("customerId")) : existing.customerId;
+  if (customerId) await assertCustomerAccess(ctx, customerId, true);
+  await assertContactMatches(ctx, formData.has("contactId") ? str(formData.get("contactId")) : existing.contactId, customerId);
   const data: Record<string, unknown> = {};
   const title = str(formData.get("title"));
   if (title) data.title = title;
@@ -99,6 +106,9 @@ export async function updateDeal(id: string, formData: FormData) {
     data.expectedCloseDate = str(formData.get("expectedCloseDate"))
       ? new Date(String(formData.get("expectedCloseDate")))
       : null;
+  }
+  if ((data.customerId !== undefined && data.customerId !== existing.customerId) || (data.ownerId !== undefined && data.ownerId !== existing.ownerId)) {
+    if (await prisma.order.count({ where: { dealId: id } }) || await prisma.serviceContract.count({ where: { dealId: id } })) throw new Error("Deal có giao dịch/hợp đồng; không được đổi khách hàng hoặc nhân viên để giữ đối chiếu.");
   }
   await prisma.deal.update({ where: { id }, data });
   await rescoreDeal(id);
@@ -219,6 +229,8 @@ export async function setDealCloseBucket(dealId: string, bucket: string) {
 export async function setDealOwner(dealId: string, ownerId: string) {
   const ctx = await requireUser();
   if (!hasPerm(ctx, "changeDealOwner")) throw new Error("Bạn không có quyền đổi người sở hữu deal.");
+  await assertDealWrite(ctx, dealId);
+  if (await prisma.order.count({ where: { dealId } }) || await prisma.serviceContract.count({ where: { dealId } })) throw new Error("Deal có giao dịch/hợp đồng; không được đổi nhân viên.");
   await prisma.deal.update({ where: { id: dealId }, data: { ownerId: ownerId || null } });
   revalidateDeal(dealId);
 }
@@ -329,7 +341,10 @@ export async function deleteActivity(id: string) {
 
 // ---------- Contact ----------
 export async function createContact(formData: FormData) {
-  await requireUser();
+  const ctx = await requireUser();
+  const customerId = str(formData.get("customerId"));
+  if (!customerId) throw new Error("Contact phải thuộc khách hàng.");
+  await assertCustomerAccess(ctx, customerId, true);
   const name = str(formData.get("name"));
   if (!name) return;
   await prisma.contact.create({
@@ -346,7 +361,8 @@ export async function createContact(formData: FormData) {
 }
 
 export async function updateContact(id: string, formData: FormData) {
-  await requireUser();
+  const ctx = await requireUser();
+  await assertContactAccess(ctx, id);
   await prisma.contact.update({
     where: { id },
     data: {
@@ -361,14 +377,18 @@ export async function updateContact(id: string, formData: FormData) {
 }
 
 export async function deleteContact(id: string, customerId?: string) {
-  await requireUser();
+  const ctx = await requireUser();
+  const contact = await assertContactAccess(ctx, id);
+  const customer = await assertCustomerAccess(ctx, contact.customerId!, true);
+  if (!canDelete(ctx, customer)) throw new Error("Không có quyền xoá Contact.");
   await prisma.contact.delete({ where: { id } });
   if (customerId) revalidatePath(`/customers/${customerId}`);
 }
 
 export async function setDealContact(dealId: string, contactId: string) {
   const ctx = await requireUser();
-  await assertDealWrite(ctx, dealId);
+  const deal = await assertDealWrite(ctx, dealId);
+  await assertContactMatches(ctx, contactId, deal.customerId);
   await prisma.deal.update({ where: { id: dealId }, data: { contactId: contactId || null } });
   revalidateDeal(dealId);
 }

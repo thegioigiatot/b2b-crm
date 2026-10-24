@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { markDealWon, markDealLost, reopenDeal } from "@/lib/deal-actions";
 
@@ -13,6 +14,7 @@ export default function DealWonLost({ dealId, status }: { dealId: string; status
         <span className={status === "Thắng" ? "chip chip-green" : "chip chip-hot"}>
           {status === "Thắng" ? "🏆 Đã thắng" : "🚫 Đã thua"}
         </span>
+        {status === "Thắng" && <Link href={`/sales/new?dealId=${dealId}`} className="btn btn-primary btn-sm">Ghi nhận thu tiền</Link>}
         <button
           type="button"
           disabled={isPending}

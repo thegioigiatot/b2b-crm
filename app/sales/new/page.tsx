@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { dealVisibilityWhere } from "@/lib/auth";
+import { customerVisibilityWhere } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader";
 import { getMasterData } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
@@ -13,11 +16,14 @@ async function createOrderAndRedirect(formData: FormData) {
   redirect("/sales");
 }
 
-export default async function NewOrderPage() {
-  await requireUser();
+export default async function NewOrderPage({ searchParams }: { searchParams: Promise<{ dealId?: string }> }) {
+  const ctx = await requireUser();
+  const sp = await searchParams;
+  const deals = await prisma.deal.findMany({ where: { AND: [dealVisibilityWhere(ctx), { status: "Thắng", contract: null }] }, orderBy: { title: "asc" } });
+  const selected = deals.find(d => d.id === sp.dealId);
   const [master, customers] = await Promise.all([
     getMasterData(),
-    prisma.customer.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
+    prisma.customer.findMany({ where: customerVisibilityWhere(await requireUser()), orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
   ]);
 
   return (
@@ -25,6 +31,9 @@ export default async function NewOrderPage() {
       <PageHeader title="+ Ghi nhận đơn hàng / tương tác bán hàng" />
       <div className="p-6 max-w-3xl">
         <form action={createOrderAndRedirect} className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+          <input type="hidden" name="bookingKey" value={randomUUID()}/>
+          <p className="text-sm text-slate-600">Giao dịch một lần: chỉ nhập phí dịch vụ đã thu, chưa gồm VAT và media. Thu nhiều đợt hoặc dịch vụ định kỳ: dùng Hợp đồng trong chi tiết deal.</p>
+          <label className="block text-xs">Deal thắng (bắt buộc khi ghi thu tiền)<select name="dealId" className="input" defaultValue={selected?.id ?? ""}><option value="">Chọn deal</option>{deals.map(d=><option key={d.id} value={d.id}>{d.code} · {d.title}</option>)}</select></label>
           <div className="grid grid-cols-2 gap-4">
             <label className="block">
               <span className="block text-xs font-medium text-slate-500 mb-1">
@@ -34,7 +43,7 @@ export default async function NewOrderPage() {
             </label>
             <label className="block">
               <span className="block text-xs font-medium text-slate-500 mb-1">Khách hàng</span>
-              <select name="customerId" className="input">
+              <select name="customerId" className="input" defaultValue={selected?.customerId ?? ""}>
                 <option value="">-</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -45,9 +54,9 @@ export default async function NewOrderPage() {
             </label>
             <label className="block">
               <span className="block text-xs font-medium text-slate-500 mb-1">Nhân viên kinh doanh</span>
-              <select name="employeeId" className="input">
+              <select name="employeeId" className="input" defaultValue={selected?.ownerId ?? ctx.employee?.id ?? ""}>
                 <option value="">-</option>
-                {master.employees.map((e) => (
+                {master.employees.filter(e=>ctx.perms.editAnyRecord || e.id===ctx.employee?.id).map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.name}
                   </option>
@@ -110,10 +119,10 @@ export default async function NewOrderPage() {
           <div className="flex items-center gap-4 rounded-lg bg-slate-50 p-3">
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" name="isClosed" />
-              Đơn hàng đã chốt
+              Đã thu phí dịch vụ
             </label>
             <label className="flex-1 flex items-center gap-2 text-sm text-slate-700">
-              Giá trị đơn hàng
+              Phí dịch vụ đã thu
               <input name="value" type="number" min={0} step={1000} placeholder="VD: 45000" className="input" />
             </label>
           </div>

@@ -148,8 +148,10 @@ function owns(ctx: AuthContext, res?: OwnedRow): boolean {
   return !!res.followers?.some((f) => f.employeeId === empId);
 }
 
-type Entity = "deal" | "lead" | "task";
+type Entity = "deal" | "lead" | "task" | "customer" | "sale";
 const VIEW_ALL: Record<Entity, PermKey> = {
+  customer: "viewAllCustomers",
+  sale: "viewAllSales",
   deal: "viewAllDeals",
   lead: "viewAllLeads",
   task: "viewAllTasks",
@@ -173,17 +175,13 @@ export function can(
   action: "record:write" | "record:read" | "record:delete",
   res?: OwnedRow,
 ): boolean {
-  if (action === "record:read") return ctx.perms.editAnyRecord || owns(ctx, res) || anyViewAll(ctx);
+  if (action === "record:read") return ctx.perms.editAnyRecord || owns(ctx, res);
   if (action === "record:delete") return canDelete(ctx, res);
   return canEdit(ctx, res);
 }
-function anyViewAll(ctx: AuthContext) {
-  return ctx.perms.viewAllDeals || ctx.perms.viewAllLeads || ctx.perms.viewAllTasks;
-}
-
 /** True when the user manages team data — used for UI hints (owner filters, pickers). */
 export function isPrivileged(ctx: AuthContext) {
-  return ctx.perms.editAnyRecord || ctx.perms.viewAllDeals;
+  return ctx.perms.editAnyRecord;
 }
 
 /** Prisma `where` fragment restricting Deal rows to what the viewer may see. */
@@ -215,4 +213,11 @@ export async function ensureRoleConfigs() {
     }
   }
   return prisma.roleConfig.findMany();
+}
+
+export function customerVisibilityWhere(ctx: AuthContext) {
+  return ctx.perms.viewAllCustomers ? {} : { employeeId: ctx.employee?.id ?? "__none__" };
+}
+export function salesVisibilityWhere(ctx: AuthContext) {
+  return ctx.perms.viewAllSales ? {} : { employeeId: ctx.employee?.id ?? "__none__" };
 }

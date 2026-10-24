@@ -1,8 +1,8 @@
 import { prisma } from "./prisma";
-import { monthRange, daysSince, initials } from "./format";
+import { monthRange, monthValue, daysSince, initials } from "./format";
 import { parseScoringConfig } from "./scoring";
 import type { AuthContext } from "./auth";
-import { dealVisibilityWhere, leadVisibilityWhere, taskVisibilityWhere } from "./auth";
+import { requireUser, customerVisibilityWhere, salesVisibilityWhere, dealVisibilityWhere, leadVisibilityWhere, taskVisibilityWhere } from "./auth";
 
 // ---------- Cảnh báo "cần chú ý" cho người dùng hiện tại ----------
 export async function getMyAlerts(ctx: AuthContext) {
@@ -52,32 +52,36 @@ export async function getMasterData() {
 }
 
 export async function getAvailableMonths() {
+  const ctx = await requireUser();
   const [orders, kpis] = await Promise.all([
-    prisma.order.findMany({ select: { date: true }, distinct: ["date"] }),
-    prisma.kpiTarget.findMany({ select: { month: true }, distinct: ["month"] }),
+    prisma.order.findMany({ where: salesVisibilityWhere(ctx), select: { date: true }, distinct: ["date"] }),
+    prisma.kpiTarget.findMany({ where: ctx.perms.viewAllSales ? {} : { employeeId: ctx.employee?.id ?? "__none__" }, select: { month: true }, distinct: ["month"] }),
   ]);
   const set = new Set<string>();
   for (const o of orders) set.add(`${o.date.getFullYear()}-${String(o.date.getMonth() + 1).padStart(2, "0")}`);
   for (const k of kpis) set.add(`${k.month.getFullYear()}-${String(k.month.getMonth() + 1).padStart(2, "0")}`);
+  // A new production database has no sales/KPI months yet.
+  if (set.size === 0) set.add(monthValue(new Date()));
   return [...set].sort();
 }
 
 export async function getDashboardData(monthStr: string) {
+  const ctx = await requireUser();
   const { start, end } = monthRange(monthStr);
 
   const [totalCustomers, oldCustomers, monthOrders, allOrders, statuses, firstOrderPerCustomer] = await Promise.all([
-    prisma.customer.count(),
-    prisma.customer.count({ where: { isNew: false } }),
+    prisma.customer.count({ where: customerVisibilityWhere(ctx) }),
+    prisma.customer.count({ where: { isNew: false, ...customerVisibilityWhere(ctx) } }),
     prisma.order.findMany({
-      where: { date: { gte: start, lt: end } },
+      where: { ...salesVisibilityWhere(ctx), date: { gte: start, lt: end } },
       include: { employee: true, productGroup: true, province: true, source: true, careStatus: true },
     }),
     prisma.order.findMany({
-      where: { date: { gte: new Date(start.getFullYear(), 0, 1), lt: new Date(start.getFullYear() + 1, 0, 1) } },
+      where: { ...salesVisibilityWhere(ctx), date: { gte: new Date(start.getFullYear(), 0, 1), lt: new Date(start.getFullYear() + 1, 0, 1) } },
       select: { date: true, value: true, isClosed: true },
     }),
-    prisma.careStatus.findMany({ orderBy: { sortOrder: "asc" }, include: { customers: { select: { id: true } } } }),
-    prisma.order.groupBy({ by: ["customerId"], where: { customerId: { not: null } }, _min: { date: true } }),
+    prisma.careStatus.findMany({ orderBy: { sortOrder: "asc" }, include: { customers: { where: customerVisibilityWhere(ctx), select: { id: true } } } }),
+    prisma.order.groupBy({ by: ["customerId"], where: { ...salesVisibilityWhere(ctx), customerId: { not: null } }, _min: { date: true } }),
   ]);
   // "Khách hàng mới trong tháng": customers whose earliest recorded interaction falls in this month.
   const newCustomersThisMonth = firstOrderPerCustomer.filter(
@@ -90,7 +94,7 @@ export async function getDashboardData(monthStr: string) {
   const closedCount = closedMonthOrders.length;
 
   const kpiTargets = await prisma.kpiTarget.aggregate({
-    where: { month: start },
+    where: { ...salesVisibilityWhere(ctx), month: start },
     _sum: { targetRevenue: true },
   });
 
@@ -104,7 +108,7 @@ export async function getDashboardData(monthStr: string) {
   }
   const kpiByMonth = await prisma.kpiTarget.groupBy({
     by: ["month"],
-    where: { month: { gte: new Date(start.getFullYear(), 0, 1), lt: new Date(start.getFullYear() + 1, 0, 1) } },
+    where: { ...salesVisibilityWhere(ctx), month: { gte: new Date(start.getFullYear(), 0, 1), lt: new Date(start.getFullYear() + 1, 0, 1) } },
     _sum: { targetRevenue: true },
   });
   const kpiByMonthMap = new Map(kpiByMonth.map((k) => [k.month.getMonth(), k._sum.targetRevenue ?? 0]));
@@ -157,7 +161,7 @@ export async function getDashboardData(monthStr: string) {
 
   // birthdays this month
   const monthNum = start.getMonth() + 1;
-  const allCustomers = await prisma.customer.findMany({ where: { dob: { not: null } }, select: { id: true, code: true, name: true, dob: true } });
+  const allCustomers = await prisma.customer.findMany({ where: { ...customerVisibilityWhere(ctx), dob: { not: null } }, select: { id: true, code: true, name: true, dob: true } });
   const birthdays = allCustomers
     .filter((c) => c.dob && c.dob.getMonth() + 1 === monthNum)
     .sort((a, b) => (a.dob!.getDate() - b.dob!.getDate()));
@@ -183,9 +187,11 @@ export async function getDashboardData(monthStr: string) {
 }
 
 export async function getCustomers(filters: { q?: string; statusId?: string; employeeId?: string; provinceId?: string }) {
+  const ctx = await requireUser();
   return prisma.customer.findMany({
     where: {
       AND: [
+        customerVisibilityWhere(ctx),
         filters.q
           ? {
               OR: [
@@ -206,18 +212,19 @@ export async function getCustomers(filters: { q?: string; statusId?: string; emp
 }
 
 export async function getCustomerDetail(id: string) {
-  const customer = await prisma.customer.findUnique({
-    where: { id },
+  const ctx = await requireUser();
+  const customer = await prisma.customer.findFirst({
+    where: { id, ...customerVisibilityWhere(ctx) },
     include: {
       province: true,
       employee: true,
       careStatus: true,
       source: true,
       careLogs: { orderBy: { date: "desc" } },
-      orders: { orderBy: { date: "desc" }, include: { productGroup: true, employee: true, careStatus: true } },
-      tasks: { orderBy: [{ status: "asc" }, { dueDate: "asc" }], include: { employee: true } },
-      deals: { include: { stage: true, owner: true }, orderBy: { updatedAt: "desc" } },
-      leads: { select: { id: true, code: true, label: true } },
+      orders: { where: salesVisibilityWhere(ctx), orderBy: { date: "desc" }, include: { productGroup: true, employee: true, careStatus: true } },
+      tasks: { where: taskVisibilityWhere(ctx), orderBy: [{ status: "asc" }, { dueDate: "asc" }], include: { employee: true } },
+      deals: { where: dealVisibilityWhere(ctx), include: { stage: true, owner: true }, orderBy: { updatedAt: "desc" } },
+      leads: { where: leadVisibilityWhere(ctx), select: { id: true, code: true, label: true } },
       contacts: { orderBy: { name: "asc" } },
     },
   });
@@ -225,6 +232,7 @@ export async function getCustomerDetail(id: string) {
 }
 
 export async function getOrders(filters: { month?: string; employeeId?: string; productGroupId?: string; statusId?: string }) {
+  const ctx = await requireUser();
   const where: Record<string, unknown> = {};
   if (filters.month) {
     const { start, end } = monthRange(filters.month);
@@ -235,8 +243,8 @@ export async function getOrders(filters: { month?: string; employeeId?: string; 
   if (filters.statusId) where.careStatusId = filters.statusId;
 
   return prisma.order.findMany({
-    where,
-    include: { customer: true, employee: true, productGroup: true, careStatus: true, province: true },
+    where: { AND: [where, salesVisibilityWhere(ctx)] },
+    include: { customer: true, deal: true, employee: true, productGroup: true, careStatus: true, province: true },
     orderBy: { date: "desc" },
     take: 300,
   });
@@ -244,11 +252,12 @@ export async function getOrders(filters: { month?: string; employeeId?: string; 
 
 // Bảng trạng thái chăm sóc khách hàng (account funnel) — vẫn dùng cho trang Khách hàng.
 export async function getCustomerStatusBoard(employeeId?: string) {
+  const ctx = await requireUser();
   const [statuses, employees, customers] = await Promise.all([
     prisma.careStatus.findMany({ orderBy: { sortOrder: "asc" } }),
     prisma.employee.findMany({ orderBy: { name: "asc" } }),
     prisma.customer.findMany({
-      where: employeeId ? { employeeId } : {},
+      where: { AND: [customerVisibilityWhere(ctx), employeeId ? { employeeId } : {}] },
       include: {
         employee: true,
         orders: { where: { isClosed: true }, select: { value: true } },
@@ -300,9 +309,10 @@ export async function getTasks(filters: { employeeId?: string; status?: string }
 }
 
 export async function getTaskProgressByEmployee() {
+  const ctx = await requireUser();
   const [employees, tasks] = await Promise.all([
     prisma.employee.findMany({ orderBy: { name: "asc" } }),
-    prisma.task.findMany({ select: { employeeId: true, status: true, dueDate: true } }),
+    prisma.task.findMany({ where: taskVisibilityWhere(ctx), select: { employeeId: true, status: true, dueDate: true } }),
   ]);
   const now = new Date();
   return employees
@@ -316,20 +326,21 @@ export async function getTaskProgressByEmployee() {
 }
 
 export async function getKpiTable(monthStr: string) {
+  const ctx = await requireUser();
   const { start, end } = monthRange(monthStr);
   const [targets, employees, productGroups] = await Promise.all([
     prisma.kpiTarget.findMany({
-      where: { month: start },
+      where: { month: start, ...salesVisibilityWhere(ctx) },
       include: { employee: true, productGroup: true },
       orderBy: [{ employee: { name: "asc" } }, { productGroup: { name: "asc" } }],
     }),
-    prisma.employee.findMany({ orderBy: { name: "asc" } }),
+    prisma.employee.findMany({ where: ctx.perms.viewAllSales ? {} : { id: ctx.employee?.id ?? "__none__" }, orderBy: { name: "asc" } }),
     prisma.productGroup.findMany({ orderBy: { name: "asc" } }),
   ]);
 
   const actuals = await prisma.order.groupBy({
     by: ["employeeId", "productGroupId"],
-    where: { date: { gte: start, lt: end }, isClosed: true },
+    where: { ...salesVisibilityWhere(ctx), date: { gte: start, lt: end }, isClosed: true },
     _sum: { value: true },
   });
   const actualMap = new Map(actuals.map((a) => [`${a.employeeId}|${a.productGroupId}`, a._sum.value ?? 0]));
@@ -399,7 +410,7 @@ export async function getPipelineBoard(opts: { ownerId?: string } = {}, viewer?:
       orderBy: [{ label: "asc" }, { updatedAt: "desc" }],
     }),
     prisma.employee.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
-    prisma.customer.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
+    prisma.customer.findMany({ where: customerVisibilityWhere(await requireUser()), orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
     prisma.source.findMany({ orderBy: { name: "asc" } }),
   ]);
 
@@ -547,6 +558,8 @@ export async function getDealDetail(id: string) {
 }
 
 export async function getContacts(customerId: string) {
+  const { assertCustomerAccess } = await import("./record-access");
+  await assertCustomerAccess(await requireUser(), customerId);
   return prisma.contact.findMany({ where: { customerId }, orderBy: { name: "asc" } });
 }
 
