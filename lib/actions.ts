@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { CustomerInputError, customerText, customerDob } from "./customer-errors";
 import { parseKpiInput } from "./kpi";
 import { prisma } from "./prisma";
 import { requireUser, requirePerm, can, canDelete, canEdit, isPrivileged } from "./auth";
@@ -52,39 +53,56 @@ export async function deleteKpiTarget(id: string) {
 export async function upsertCustomer(formData: FormData) {
   const ctx = await requireUser();
   const id = str(formData.get("id"));
-  if (id) await assertCustomerAccess(ctx, id, true);
+  const existing = id ? await assertCustomerAccess(ctx, id, true) : null;
+  const code = customerText(formData.get("code"), 80);
+  const name = customerText(formData.get("name"), 200);
+  if (!code || !name) throw new CustomerInputError("Mã và tên khách hàng không được để trống.");
   const data = {
-    code: String(formData.get("code")).trim(),
-    name: String(formData.get("name")).trim(),
-    gender: str(formData.get("gender")),
-    phone: str(formData.get("phone")),
-    dob: str(formData.get("dob")) ? new Date(String(formData.get("dob"))) : null,
+    code, name,
+    gender: customerText(formData.get("gender"), 50),
+    phone: customerText(formData.get("phone"), 50),
+    dob: customerDob(formData.get("dob")),
     provinceId: str(formData.get("provinceId")) ?? null,
-    district: str(formData.get("district")),
-    taxCode: str(formData.get("taxCode")) ?? null,
-    industry: str(formData.get("industry")) ?? null,
+    district: customerText(formData.get("district"), 200),
+    taxCode: customerText(formData.get("taxCode"), 80),
+    industry: customerText(formData.get("industry"), 200),
     sourceId: str(formData.get("sourceId")) ?? null,
     employeeId: assignedEmployee(ctx, str(formData.get("employeeId"))),
     careStatusId: str(formData.get("careStatusId")) ?? null,
     isNew: formData.get("isNew") === "on",
-    storeName: str(formData.get("storeName")),
-    storeAddress: str(formData.get("storeAddress")),
-    notes: str(formData.get("notes")),
+    storeName: customerText(formData.get("storeName"), 200),
+    storeAddress: customerText(formData.get("storeAddress"), 1000),
+    notes: customerText(formData.get("notes")),
   };
-  const customer = id
-    ? await prisma.customer.update({ where: { id }, data })
-    : await prisma.customer.create({ data });
-  revalidatePath("/customers");
+  const customer = await prisma.$transaction(async tx => {
+    if (!id) return tx.customer.create({ data });
+    await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${id} FOR UPDATE`;
+    const row = await tx.customer.findUnique({ where: { id }, include: { _count: { select: { orders: true, deals: true, leads: true, tasks: true, contacts: true, careLogs: true, documents: true } } } });
+    if (!row || !canEdit(ctx, row)) throw new CustomerInputError("Không có quyền với khách hàng này.");
+    const version = str(formData.get("updatedAt"));
+    if (!version || version !== row.updatedAt.toISOString()) throw new CustomerInputError("Hồ sơ đã thay đổi hoặc biểu mẫu đã cũ. Tải lại trang trước khi lưu để tránh ghi đè.");
+    if (data.employeeId !== existing?.employeeId && Object.values(row._count).some(n => n > 0)) throw new CustomerInputError("Khách hàng có hồ sơ liên quan; chưa hỗ trợ chuyển đồng bộ nhân viên. Giữ người phụ trách hiện tại.");
+    return tx.customer.update({ where: { id }, data });
+  });
+  revalidatePath("/customers", "layout");
   revalidatePath("/");
   redirect(`/customers/${customer.id}`);
 }
 
-export async function deleteCustomer(id: string) {
+export async function deleteCustomer(id: string, confirmedCode?: string) {
   const ctx = await requireUser();
-  const customer = await assertCustomerAccess(ctx, id, true);
-  if (!canDelete(ctx, customer)) throw new Error("Không có quyền xoá khách hàng.");
-  await prisma.customer.delete({ where: { id } });
+  if (!ctx.perms.deleteRecords) throw new CustomerInputError("Không có quyền xoá khách hàng.");
+  await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${id} FOR UPDATE`;
+    const row = await tx.customer.findUnique({ where: { id }, include: { _count: { select: { orders: true, deals: true, leads: true, tasks: true, contacts: true, careLogs: true, documents: true } } } });
+    if (!row) return; // A repeated delete must not affect any other customer.
+    if (!canDelete(ctx, row)) throw new CustomerInputError("Không có quyền xoá khách hàng.");
+    if (confirmedCode !== row.code) throw new CustomerInputError("Nhập đúng mã khách hàng để xác nhận xoá.");
+    if (Object.values(row._count).some(n => n > 0)) throw new CustomerInputError("Không thể xoá: khách hàng đã có Contact, deal, giao dịch hoặc lịch sử liên quan. Dữ liệu được giữ nguyên để đối soát.");
+    await tx.customer.delete({ where: { id } });
+  });
   revalidatePath("/customers", "layout");
+  revalidatePath("/");
   redirect("/customers");
 }
 

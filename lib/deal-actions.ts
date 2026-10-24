@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { CustomerInputError } from "./customer-errors";
 import { prisma } from "./prisma";
 import { rescoreDeal } from "./scoring-actions";
 import { nextCode } from "./codes";
@@ -381,7 +382,11 @@ export async function deleteContact(id: string, customerId?: string) {
   const contact = await assertContactAccess(ctx, id);
   const customer = await assertCustomerAccess(ctx, contact.customerId!, true);
   if (!canDelete(ctx, customer)) throw new Error("Không có quyền xoá Contact.");
-  await prisma.contact.delete({ where: { id } });
+  await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Contact" WHERE id = ${id} FOR UPDATE`;
+    if (await tx.deal.count({ where: { contactId: id } })) throw new CustomerInputError("Contact đang được dùng trong deal; không thể xoá để tránh mất liên kết.");
+    await tx.contact.delete({ where: { id } });
+  });
   if (customerId) revalidatePath(`/customers/${customerId}`);
 }
 

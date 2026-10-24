@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
-import { upsertCustomer } from "@/lib/actions";
+import ActionForm from "@/components/ActionForm";
+import { saveCustomerForm } from "@/lib/customer-form-actions";
 import type { Customer, Employee, Province, Source, CareStatus } from "@prisma/client";
 
 export default async function CustomerForm({
@@ -14,8 +15,8 @@ export default async function CustomerForm({
   const dobValue = customer?.dob ? new Date(customer.dob).toISOString().slice(0, 10) : "";
 
   return (
-    <form action={upsertCustomer} className="space-y-4">
-      {customer && <input type="hidden" name="id" value={customer.id} />}
+    <ActionForm action={saveCustomerForm} className="space-y-4">
+      {customer && <><input type="hidden" name="id" value={customer.id} /><input type="hidden" name="updatedAt" value={customer.updatedAt.toISOString()} /></>}
       <div className="grid grid-cols-2 gap-4">
         <Field label="Mã khách hàng" required>
           <input name="code" defaultValue={customer?.code} required className="input" />
@@ -102,7 +103,7 @@ export default async function CustomerForm({
       <button type="submit" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
         {customer ? "Lưu thay đổi" : "Thêm khách hàng"}
       </button>
-    </form>
+    </ActionForm>
   );
 }
 

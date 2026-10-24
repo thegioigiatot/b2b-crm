@@ -3,16 +3,18 @@ import { notFound } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import CustomerForm from "@/components/CustomerForm";
 import { getCustomerDetail, getMasterData } from "@/lib/queries";
-import { addCareLog, createTask, deleteCustomer, deleteOrder } from "@/lib/actions";
+import { addCareLog, createTask, deleteOrder } from "@/lib/actions";
 import { createContact, deleteContact } from "@/lib/deal-actions";
 import TaskStatusSelect from "@/components/TaskStatusSelect";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { requireUser } from "@/lib/auth";
+import ActionForm from "@/components/ActionForm";
+import { deleteCustomerForm } from "@/lib/customer-form-actions";
+import { requireUser, canDelete } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireUser();
+  const ctx = await requireUser();
   const { id } = await params;
   const [customer, master] = await Promise.all([getCustomerDetail(id), getMasterData()]);
   if (!customer) notFound();
@@ -27,11 +29,14 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
         title={`${customer.code} · ${customer.name}`}
         subtitle={customer.careStatus?.name ?? "Chưa có trạng thái"}
         actions={
-          <form action={deleteCustomer.bind(null, customer.id)}>
-            <button type="submit" className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50">
-              Xoá khách hàng
-            </button>
-          </form>
+          canDelete(ctx, customer) ? <details className="text-sm">
+            <summary className="cursor-pointer text-rose-600">Xoá khách hàng</summary>
+            <ActionForm action={deleteCustomerForm.bind(null, customer.id)} className="mt-2 space-y-2 max-w-xs">
+              <p>Chỉ xoá hồ sơ trống, chưa có dữ liệu liên quan. Nhập mã {customer.code} để xác nhận.</p>
+              <input name="confirmedCode" required className="input" placeholder="Mã khách hàng xác nhận xoá" />
+              <button type="submit" className="btn btn-danger-outline">Xác nhận xoá khách hàng</button>
+            </ActionForm>
+          </details> : undefined
         }
       />
       <div className="p-6 space-y-6">
@@ -76,11 +81,11 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
                       {c.email ? ` · ${c.email}` : ""}
                     </span>
                   </span>
-                  <form action={deleteContact.bind(null, c.id, customer.id)}>
+                  {canDelete(ctx, customer) && c._count.deals === 0 && <form action={deleteContact.bind(null, c.id, customer.id)}>
                     <button type="submit" className="text-xs text-slate-400 hover:text-rose-600">
                       Xoá
                     </button>
-                  </form>
+                  </form>}
                 </li>
               ))}
             </ul>
@@ -237,11 +242,11 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
                   <td className="px-4 py-2.5 text-slate-500">{o.careStatus?.name ?? "-"}</td>
                   <td className="px-4 py-2.5 text-right font-medium text-slate-900">{o.isClosed ? formatCurrency(o.value) : "-"}</td>
                   <td className="px-4 py-2.5 text-right">
-                    <form action={deleteOrder.bind(null, o.id)}>
+                    {canDelete(ctx, o) && !o.paymentId && <form action={deleteOrder.bind(null, o.id)}>
                       <button type="submit" className="text-xs text-slate-400 hover:text-rose-600">
                         Xoá
                       </button>
-                    </form>
+                    </form>}
                   </td>
                 </tr>
               ))}

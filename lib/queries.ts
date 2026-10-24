@@ -226,7 +226,7 @@ export async function getCustomerDetail(id: string) {
       tasks: { where: taskVisibilityWhere(ctx), orderBy: [{ status: "asc" }, { dueDate: "asc" }], include: { employee: true } },
       deals: { where: dealVisibilityWhere(ctx), include: { stage: true, owner: true }, orderBy: { updatedAt: "desc" } },
       leads: { where: leadVisibilityWhere(ctx), select: { id: true, code: true, label: true } },
-      contacts: { orderBy: { name: "asc" } },
+      contacts: { orderBy: { name: "asc" }, include: { _count: { select: { deals: true } } } },
     },
   });
   return customer;

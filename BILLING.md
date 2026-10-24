@@ -41,3 +41,12 @@ Test dùng PostgreSQL thật, action và DAL thật. Chỉ mô phỏng cookie re
 Trang KPI lấy hợp của nhóm có chỉ tiêu và nhóm có doanh số thực thu. Nhóm chưa có KpiTarget vẫn được tính đủ trong doanh số tổng/biểu đồ, có cảnh báo và không hiển thị tỷ lệ phần trăm riêng cho nhóm đó. Không tự thêm chỉ tiêu 0 vào DB; chỉ tiêu 0 đặt chủ động được phân biệt với chưa đặt. Dữ liệu lịch sử chưa gán nhân viên/dịch vụ vẫn hiển thị để đối soát. Thêm hoặc xóa chỉ tiêu không thay đổi doanh thu đã thu. Mục tiêu tổng bằng 0 được hiển thị “Chưa có chỉ tiêu”, không chia cho 0. Phạm vi SALES áp dụng trước khi tổng hợp.
 
 Kiểm thử hồi quy: `node --import tsx --test tests/kpi.test.cjs` cùng bộ tích hợp PostgreSQL. Thay đổi này không cần migration và không sửa mục tiêu/dữ liệu thu tiền hiện có.
+
+## Sửa/xóa khách hàng an toàn
+
+- Biểu mẫu khách hàng gửi `updatedAt` để kiểm tra phiên bản. Biểu mẫu cũ hoặc hai lần lưu cùng phiên bản không được ghi đè lẫn nhau; tải lại hồ sơ trước khi sửa tiếp.
+- Mã/tên rỗng, ngày sinh không hợp lệ và mã trùng được báo lỗi ngay trong biểu mẫu. Nội dung nhập được giữ khi bị từ chối; trường tùy chọn để trống sẽ được xóa đúng (null).
+- Không chuyển người phụ trách của khách hàng có dữ liệu liên quan vì chưa có nghiệp vụ chuyển đồng bộ toàn bộ hồ sơ.
+- Xóa cần `deleteRecords`, quyền sửa hồ sơ và xác nhận đúng mã khách hàng. Chỉ xóa hồ sơ hoàn toàn trống; Contact, deal, doanh số, công việc, lịch sử, tài liệu hoặc lead chuyển đổi đều chặn xóa. Không xóa dây chuyền lịch sử hoặc làm rơi liên kết doanh thu. Contact đang được deal dùng cũng bị chặn xóa.
+- SALES thiếu quyền xóa không thấy nút xóa. Các điều kiện tiếp tục được kiểm tra tại backend, trong transaction có khóa hồ sơ.
+- Test bổ sung: `node --import tsx tests/customer-edge.cjs` với `DATABASE_URL` và `DIRECT_URL` trỏ tới database `_test`. Bộ test tạo/dọn dữ liệu riêng; không chạy trên production.
